@@ -21,6 +21,8 @@ import com.google.common.base.Joiner;
 import org.apache.mesos.Protos;
 import org.apache.mesos.Protos.CommandInfo;
 import org.apache.mesos.Protos.CommandInfo.URI;
+import org.apache.mesos.Protos.Environment;
+import org.apache.mesos.Protos.Environment.Builder;
 import org.apache.mesos.Scheduler;
 import org.apache.mesos.SchedulerDriver;
 import org.slf4j.Logger;
@@ -48,6 +50,7 @@ public class AlluxioScheduler implements Scheduler {
   private Set<String> mWorkers = new HashSet<String>();
   int mLaunchedTasks = 0;
   int mMasterCount = 0;
+  int mWorkerCount = 0;
 
   /**
    * Creates a new {@link AlluxioScheduler}.
@@ -115,6 +118,7 @@ public class AlluxioScheduler implements Scheduler {
     long workerOverheadMem =
         Configuration.getBytes(PropertyKey.INTEGRATION_WORKER_RESOURCE_MEM) / Constants.MB;
     long ramdiskMem = Configuration.getBytes(PropertyKey.WORKER_MEMORY_SIZE) / Constants.MB;
+    long workerMem = workerOverheadMem + ramdiskMem;
 
     LOG.info("Master launched {}, master count {}, "
         + "requested master cpu {} mem {} MB and required master hostname {}",
@@ -140,14 +144,8 @@ public class AlluxioScheduler implements Scheduler {
 
       Protos.ExecutorInfo.Builder executorBuilder = Protos.ExecutorInfo.newBuilder();
       List<Protos.Resource> resources;
-      if (!mMasterLaunched
-          && offerCpu >= masterCpu
-          && offerMem >= masterMem
-          && mMasterCount < Configuration
-              .getInt(PropertyKey.INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT)
-          && OfferUtils.hasAvailableMasterPorts(offer)
-          && (mRequiredMasterHostname == null
-              || mRequiredMasterHostname.equals(offer.getHostname()))) {
+      if (isUsableAsMaster(masterCpu, masterMem, offer, offerCpu, offerMem)) {
+        // Prepare master executor
         LOG.debug("Creating Alluxio Master executor");
         executorBuilder
             .setName("Alluxio Master Executor")
@@ -159,31 +157,17 @@ public class AlluxioScheduler implements Scheduler {
                     .newBuilder()
                     .setValue(createStartAlluxioCommand("alluxio-master-mesos.sh"))
                     .addAllUris(getExecutorDependencyURIList())
-                    .setEnvironment(
-                        Protos.Environment
-                            .newBuilder()
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_UNDERFS_ADDRESS")
-                                    .setValue(Configuration.get(PropertyKey.UNDERFS_ADDRESS))
-                                    .build())
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_MESOS_SITE_PROPERTIES_CONTENT")
-                                    .setValue(createAlluxioSiteProperties())
-                                    .build())
-                            .build()));
+                    .setEnvironment(buildMasterEnvironment()));
         // pre-build resource list here, then use it to build Protos.Task later.
         resources = getMasterRequiredResources(masterCpu, masterMem);
+
+        // Gather some information about the master
         mMasterHostname = offer.getHostname();
         mTaskName = Configuration.get(PropertyKey.INTEGRATION_MESOS_ALLUXIO_MASTER_NAME);
         mMasterCount++;
         mMasterTaskId = mLaunchedTasks;
-      } else if (mMasterLaunched
-          && !mWorkers.contains(offer.getHostname())
-          && offerCpu >= workerCpu
-          && offerMem >= (ramdiskMem + workerOverheadMem)
-          && OfferUtils.hasAvailableWorkerPorts(offer)) {
+      } else if (isUsableAsWorker(workerCpu, workerMem, offer, offerCpu, offerMem)) {
+        // Prepare worker executor
         LOG.debug("Creating Alluxio Worker executor");
         final String memSize = FormatUtils.getSizeFromBytes((long) ramdiskMem * Constants.MB);
         executorBuilder
@@ -196,32 +180,14 @@ public class AlluxioScheduler implements Scheduler {
                     .newBuilder()
                     .setValue(createStartAlluxioCommand("alluxio-worker-mesos.sh"))
                     .addAllUris(getExecutorDependencyURIList())
-                    .setEnvironment(
-                        Protos.Environment
-                            .newBuilder()
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_MASTER_HOSTNAME").setValue(mMasterHostname)
-                                    .build())
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_WORKER_MEMORY_SIZE").setValue(memSize)
-                                    .build())
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_UNDERFS_ADDRESS")
-                                    .setValue(Configuration.get(PropertyKey.UNDERFS_ADDRESS))
-                                    .build())
-                            .addVariables(
-                                Protos.Environment.Variable.newBuilder()
-                                    .setName("ALLUXIO_MESOS_SITE_PROPERTIES_CONTENT")
-                                    .setValue(createAlluxioSiteProperties())
-                                    .build())
-                            .build()));
+                    .setEnvironment(buildWorkerEnvironment(memSize)));
         // pre-build resource list here, then use it to build Protos.Task later.
         resources = getWorkerRequiredResources(workerCpu, ramdiskMem + workerOverheadMem);
+
+        // Gather some information about the worker
         mWorkers.add(offer.getHostname());
         mTaskName = Configuration.get(PropertyKey.INTEGRATION_MESOS_ALLUXIO_WORKER_NAME);
+        mWorkerCount++;
       } else {
         // The resource offer cannot be used to start either master or a worker.
         LOG.info("Declining offer {}", offer.getId().getValue());
@@ -258,6 +224,38 @@ public class AlluxioScheduler implements Scheduler {
       Protos.Filters filters = Protos.Filters.newBuilder().setRefuseSeconds(1).build();
       driver.acceptOffers(offerIds, operations, filters);
     }
+  }
+
+  private Environment buildWorkerEnvironment(final String memSize) {
+    return buildCommonEnvironment()
+        .addVariables(
+            Protos.Environment.Variable.newBuilder()
+                .setName("ALLUXIO_MASTER_HOSTNAME").setValue(mMasterHostname)
+                .build())
+        .addVariables(
+            Protos.Environment.Variable.newBuilder()
+                .setName("ALLUXIO_WORKER_MEMORY_SIZE").setValue(memSize)
+                .build())
+        .build();
+  }
+
+  private Environment buildMasterEnvironment() {
+    return buildCommonEnvironment().build();
+  }
+
+  private Builder buildCommonEnvironment() {
+    return Protos.Environment
+        .newBuilder()
+        .addVariables(
+            Protos.Environment.Variable.newBuilder()
+                .setName("ALLUXIO_UNDERFS_ADDRESS")
+                .setValue(Configuration.get(PropertyKey.UNDERFS_ADDRESS))
+                .build())
+        .addVariables(
+            Protos.Environment.Variable.newBuilder()
+                .setName("ALLUXIO_MESOS_SITE_PROPERTIES_CONTENT")
+                .setValue(createAlluxioSiteProperties())
+                .build());
   }
 
   /**
@@ -428,5 +426,26 @@ public class AlluxioScheduler implements Scheduler {
     return Configuration.containsKey(PropertyKey.INTEGRATION_MESOS_ALLUXIO_JAR_URL)
         && !Configuration.get(PropertyKey.INTEGRATION_MESOS_ALLUXIO_JAR_URL)
             .equalsIgnoreCase(Constants.MESOS_LOCAL_INSTALL);
+  }
+
+  private boolean isUsableAsMaster(long masterCpu, long masterMem, Protos.Offer offer,
+      double offerCpu, double offerMem) {
+    return !mMasterLaunched
+        && offerCpu >= masterCpu
+        && offerMem >= masterMem
+        && mMasterCount < Configuration
+            .getInt(PropertyKey.INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT)
+        && OfferUtils.hasAvailableMasterPorts(offer)
+        && (mRequiredMasterHostname == null
+            || mRequiredMasterHostname.equals(offer.getHostname()));
+  }
+
+  private boolean isUsableAsWorker(long workerCpu, long workerMem, Protos.Offer offer,
+      double offerCpu, double offerMem) {
+    return mMasterLaunched
+        && !mWorkers.contains(offer.getHostname())
+        && offerCpu >= workerCpu
+        && offerMem >= workerMem
+        && OfferUtils.hasAvailableWorkerPorts(offer);
   }
 }
