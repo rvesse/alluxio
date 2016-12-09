@@ -71,6 +71,9 @@ public class AlluxioFramework {
       frameworkInfo.setPrincipal(Configuration.get(PropertyKey.INTEGRATION_MESOS_PRINCIPAL));
     }
 
+    // TODO(rvesse) Add framework name to info
+    // TODO(rvesse) Add master URL to info if knowable in advance i.e. fixed master
+
     Scheduler scheduler = new AlluxioScheduler(mAlluxioMasterHostname);
 
     Protos.Credential cred = createCredential();

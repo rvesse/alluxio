@@ -48,9 +48,14 @@ public class AlluxioScheduler implements Scheduler {
   private String mTaskName = "";
   private int mMasterTaskId;
   private Set<String> mWorkers = new HashSet<String>();
-  int mLaunchedTasks = 0;
-  int mMasterCount = 0;
-  int mWorkerCount = 0;
+  private int mLaunchedTasks = 0;
+  private int mMasterCount = 0;
+  private int mWorkerCount = 0;
+  private final long mMasterCpu;
+  private final long mMasterMem;
+  private final long mWorkerCpu;
+  private final long mWorkerRamdiskMem;
+  private final long mWorkerMem;
 
   /**
    * Creates a new {@link AlluxioScheduler}.
@@ -60,6 +65,16 @@ public class AlluxioScheduler implements Scheduler {
    */
   public AlluxioScheduler(String requiredMasterHostname) {
     mRequiredMasterHostname = requiredMasterHostname;
+
+    // Figure out the resources we need
+    mMasterCpu = Configuration.getInt(PropertyKey.INTEGRATION_MASTER_RESOURCE_CPU);
+    mMasterMem =
+        Configuration.getBytes(PropertyKey.INTEGRATION_MASTER_RESOURCE_MEM) / Constants.MB;
+    mWorkerCpu = Configuration.getInt(PropertyKey.INTEGRATION_WORKER_RESOURCE_CPU);
+    long workerOverheadMem =
+        Configuration.getBytes(PropertyKey.INTEGRATION_WORKER_RESOURCE_MEM) / Constants.MB;
+    mWorkerRamdiskMem = Configuration.getBytes(PropertyKey.WORKER_MEMORY_SIZE) / Constants.MB;
+    mWorkerMem = workerOverheadMem + mWorkerRamdiskMem;
   }
 
   @Override
@@ -111,21 +126,16 @@ public class AlluxioScheduler implements Scheduler {
 
   @Override
   public void resourceOffers(SchedulerDriver driver, List<Protos.Offer> offers) {
-    long masterCpu = Configuration.getInt(PropertyKey.INTEGRATION_MASTER_RESOURCE_CPU);
-    long masterMem =
-        Configuration.getBytes(PropertyKey.INTEGRATION_MASTER_RESOURCE_MEM) / Constants.MB;
-    long workerCpu = Configuration.getInt(PropertyKey.INTEGRATION_WORKER_RESOURCE_CPU);
-    long workerOverheadMem =
-        Configuration.getBytes(PropertyKey.INTEGRATION_WORKER_RESOURCE_MEM) / Constants.MB;
-    long ramdiskMem = Configuration.getBytes(PropertyKey.WORKER_MEMORY_SIZE) / Constants.MB;
-    long workerMem = workerOverheadMem + ramdiskMem;
+    // TODO(rvesse) If we already have sufficient services running decline and suppress offers
 
     LOG.info("Master launched {}, master count {}, "
         + "requested master cpu {} mem {} MB and required master hostname {}",
-        mMasterLaunched, mMasterCount, masterCpu, masterMem, mRequiredMasterHostname);
+        mMasterLaunched, mMasterCount, mMasterCpu, mMasterMem, mRequiredMasterHostname);
 
     for (Protos.Offer offer : offers) {
       Protos.Offer.Operation.Launch.Builder launch = Protos.Offer.Operation.Launch.newBuilder();
+
+      // Find what Mesos is offering us
       double offerCpu = 0;
       double offerMem = 0;
       for (Protos.Resource resource : offer.getResourcesList()) {
@@ -144,7 +154,8 @@ public class AlluxioScheduler implements Scheduler {
 
       Protos.ExecutorInfo.Builder executorBuilder = Protos.ExecutorInfo.newBuilder();
       List<Protos.Resource> resources;
-      if (isUsableAsMaster(masterCpu, masterMem, offer, offerCpu, offerMem)) {
+      if (isUsableAsMaster(offer, offerCpu, offerMem)) {
+        // Suitable for launching a master
         // Prepare master executor
         LOG.debug("Creating Alluxio Master executor");
         executorBuilder
@@ -159,17 +170,21 @@ public class AlluxioScheduler implements Scheduler {
                     .addAllUris(getExecutorDependencyURIList())
                     .setEnvironment(buildMasterEnvironment()));
         // pre-build resource list here, then use it to build Protos.Task later.
-        resources = getMasterRequiredResources(masterCpu, masterMem);
+        resources = getMasterRequiredResources();
 
         // Gather some information about the master
         mMasterHostname = offer.getHostname();
         mTaskName = Configuration.get(PropertyKey.INTEGRATION_MESOS_ALLUXIO_MASTER_NAME);
         mMasterCount++;
+        // TODO(rvesse) If we're launching multiple masters need to store multiple Task IDs
         mMasterTaskId = mLaunchedTasks;
-      } else if (isUsableAsWorker(workerCpu, workerMem, offer, offerCpu, offerMem)) {
+
+      } else if (isUsableAsWorker(offer, offerCpu, offerMem)) {
+        // Suitable for launching a worker
         // Prepare worker executor
         LOG.debug("Creating Alluxio Worker executor");
-        final String memSize = FormatUtils.getSizeFromBytes((long) ramdiskMem * Constants.MB);
+        final String memSize = FormatUtils.getSizeFromBytes((long) mWorkerRamdiskMem
+            * Constants.MB);
         executorBuilder
             .setName("Alluxio Worker Executor")
             .setSource("worker")
@@ -182,12 +197,13 @@ public class AlluxioScheduler implements Scheduler {
                     .addAllUris(getExecutorDependencyURIList())
                     .setEnvironment(buildWorkerEnvironment(memSize)));
         // pre-build resource list here, then use it to build Protos.Task later.
-        resources = getWorkerRequiredResources(workerCpu, ramdiskMem + workerOverheadMem);
+        resources = getWorkerRequiredResources();
 
         // Gather some information about the worker
         mWorkers.add(offer.getHostname());
         mTaskName = Configuration.get(PropertyKey.INTEGRATION_MESOS_ALLUXIO_WORKER_NAME);
         mWorkerCount++;
+
       } else {
         // The resource offer cannot be used to start either master or a worker.
         LOG.info("Declining offer {}", offer.getId().getValue());
@@ -195,6 +211,7 @@ public class AlluxioScheduler implements Scheduler {
         continue;
       }
 
+      // TODO(rvesse) Build a more informative Task ID
       Protos.TaskID taskId =
           Protos.TaskID.newBuilder().setValue(String.valueOf(mLaunchedTasks)).build();
 
@@ -318,22 +335,27 @@ public class AlluxioScheduler implements Scheduler {
       case TASK_FAILED: // intend to fall through
       case TASK_LOST: // intend to fall through
       case TASK_ERROR:
+        // TODO(rvesse) Also track worker loss
         if (status.getTaskId().getValue().equals(String.valueOf(mMasterTaskId))) {
           mMasterCount--;
         }
         break;
       case TASK_RUNNING:
+        // TODO(rvesse) Also track worker launches
         if (status.getTaskId().getValue().equals(String.valueOf(mMasterTaskId))) {
           mMasterLaunched = true;
         }
+        break;
+      case TASK_KILLED:
+        // Nothing to do, this is normal when the framework shutdowns
         break;
       default:
         break;
     }
   }
 
-  private List<Protos.Resource> getMasterRequiredResources(long masterCpus, long masterMem) {
-    List<Protos.Resource> resources = getCoreRequiredResouces(masterCpus, masterMem);
+  private List<Protos.Resource> getMasterRequiredResources() {
+    List<Protos.Resource> resources = getCoreRequiredResouces(mMasterCpu, mMasterMem);
     // Set master rcp port, web ui port, data port as range resources for this task.
     // By default, it would require 19998, 19999 ports for master process.
     resources.add(Protos.Resource.newBuilder()
@@ -349,8 +371,8 @@ public class AlluxioScheduler implements Scheduler {
     return resources;
   }
 
-  private List<Protos.Resource> getWorkerRequiredResources(long workerCpus, long workerMem) {
-    List<Protos.Resource> resources = getCoreRequiredResouces(workerCpus, workerMem);
+  private List<Protos.Resource> getWorkerRequiredResources() {
+    List<Protos.Resource> resources = getCoreRequiredResouces(mWorkerCpu, mWorkerMem);
     // Set worker rcp port, web ui port, data port as range resources for this task.
     // By default, it would require 29998, 29999, 30000 ports for worker process.
     resources.add(Protos.Resource.newBuilder()
@@ -428,11 +450,11 @@ public class AlluxioScheduler implements Scheduler {
             .equalsIgnoreCase(Constants.MESOS_LOCAL_INSTALL);
   }
 
-  private boolean isUsableAsMaster(long masterCpu, long masterMem, Protos.Offer offer,
+  private boolean isUsableAsMaster(Protos.Offer offer,
       double offerCpu, double offerMem) {
     return !mMasterLaunched
-        && offerCpu >= masterCpu
-        && offerMem >= masterMem
+        && offerCpu >= mMasterCpu
+        && offerMem >= mMasterMem
         && mMasterCount < Configuration
             .getInt(PropertyKey.INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT)
         && OfferUtils.hasAvailableMasterPorts(offer)
@@ -440,12 +462,12 @@ public class AlluxioScheduler implements Scheduler {
             || mRequiredMasterHostname.equals(offer.getHostname()));
   }
 
-  private boolean isUsableAsWorker(long workerCpu, long workerMem, Protos.Offer offer,
+  private boolean isUsableAsWorker(Protos.Offer offer,
       double offerCpu, double offerMem) {
     return mMasterLaunched
         && !mWorkers.contains(offer.getHostname())
-        && offerCpu >= workerCpu
-        && offerMem >= workerMem
+        && offerCpu >= mWorkerCpu
+        && offerMem >= mWorkerMem
         && OfferUtils.hasAvailableWorkerPorts(offer);
   }
 }
