@@ -351,11 +351,18 @@ public enum PropertyKey {
   INTEGRATION_MESOS_ALLUXIO_JAR_URL(Name.INTEGRATION_MESOS_ALLUXIO_JAR_URL,
       String.format("http://downloads.alluxio.org/downloads/files/${%s}/"
       + "alluxio-${%s}-bin.tar.gz", Name.VERSION, Name.VERSION)),
+  INTEGRATION_MESOS_ALLUXIO_MASTER_CANDIDATES(Name.INTEGRATION_MESOS_ALLUXIO_MASTER_CANDIDATES,
+      null),
   INTEGRATION_MESOS_ALLUXIO_MASTER_NAME(Name.INTEGRATION_MESOS_ALLUXIO_MASTER_NAME,
       "AlluxioMaster"),
   INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT(Name.INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT, 1),
+  INTEGRATION_MESOS_ALLUXIO_WORKER_CANDIDATES(Name.INTEGRATION_MESOS_ALLUXIO_WORKER_CANDIDATES,
+      null),
   INTEGRATION_MESOS_ALLUXIO_WORKER_NAME(Name.INTEGRATION_MESOS_ALLUXIO_WORKER_NAME,
       "AlluxioWorker"),
+  INTEGRATION_MESOS_ALLUXIO_WORKER_NODE_COUNT(Name.INTEGRATION_MESOS_ALLUXIO_WORKER_NODE_COUNT, -1),
+  INTEGRATION_MESOS_ALLUXIO_WORKER_PLACEMENT(Name.INTEGRATION_MESOS_ALLUXIO_WORKER_PLACEMENT,
+      "NOT_MASTER"),
   INTEGRATION_MESOS_JDK_PATH(Name.INTEGRATION_MESOS_JDK_PATH, "jdk1.7.0_79"),
   INTEGRATION_MESOS_JDK_URL(Name.INTEGRATION_MESOS_JDK_URL,
       "https://alluxio-mesos.s3.amazonaws.com/jdk-7u79-linux-x64.tar.gz"),
@@ -377,30 +384,51 @@ public enum PropertyKey {
     public static final String CONF_DIR = "alluxio.conf.dir";
     public static final String DEBUG = "alluxio.debug";
     public static final String HOME = "alluxio.home";
+
+    //
+    // Integration (Mesos, YARN etc) related Properties
+    //
     public static final String INTEGRATION_MASTER_RESOURCE_CPU =
         "alluxio.integration.master.resource.cpu";
     public static final String INTEGRATION_MASTER_RESOURCE_MEM =
         "alluxio.integration.master.resource.mem";
+    private static final String INTEGRATION_MESOS_BASE =
+        "alluxio.integration.mesos.";
     public static final String INTEGRATION_MESOS_ALLUXIO_MASTER_NAME =
-        "alluxio.integration.mesos.master.name";
+        INTEGRATION_MESOS_BASE + "master.name";
     public static final String INTEGRATION_MESOS_ALLUXIO_MASTER_NODE_COUNT =
-        "alluxio.integration.mesos.master.node.count";
+        INTEGRATION_MESOS_BASE + "master.node.count";
+    public static final String INTEGRATION_MESOS_ALLUXIO_MASTER_CANDIDATES =
+        INTEGRATION_MESOS_BASE + "master.node.candidates";
     public static final String INTEGRATION_MESOS_ALLUXIO_WORKER_NAME =
-        "alluxio.integration.mesos.worker.name";
+        INTEGRATION_MESOS_BASE + "worker.name";
+    public static final String INTEGRATION_MESOS_ALLUXIO_WORKER_NODE_COUNT =
+        INTEGRATION_MESOS_BASE + "worker.node.count";
+    public static final String INTEGRATION_MESOS_ALLUXIO_WORKER_PLACEMENT =
+        INTEGRATION_MESOS_BASE + "worker.placement";
+    public static final String INTEGRATION_MESOS_ALLUXIO_WORKER_CANDIDATES =
+        INTEGRATION_MESOS_BASE + "worker.node.candidates";
     public static final String INTEGRATION_MESOS_ALLUXIO_JAR_URL =
-        "alluxio.integration.mesos.alluxio.jar.url";
-    public static final String INTEGRATION_MESOS_JDK_PATH = "alluxio.integration.mesos.jdk.path";
-    public static final String INTEGRATION_MESOS_JDK_URL = "alluxio.integration.mesos.jdk.url";
-    public static final String INTEGRATION_MESOS_PRINCIPAL = "alluxio.integration.mesos.principal";
-    public static final String INTEGRATION_MESOS_ROLE = "alluxio.integration.mesos.role";
-    public static final String INTEGRATION_MESOS_SECRET = "alluxio.integration.mesos.secret";
-    public static final String INTEGRATION_MESOS_USER = "alluxio.integration.mesos.user";
+        INTEGRATION_MESOS_BASE + "alluxio.jar.url";
+    public static final String INTEGRATION_MESOS_JDK_PATH =
+        INTEGRATION_MESOS_BASE + "jdk.path";
+    public static final String INTEGRATION_MESOS_JDK_URL =
+        INTEGRATION_MESOS_BASE + "jdk.url";
+    public static final String INTEGRATION_MESOS_PRINCIPAL =
+        INTEGRATION_MESOS_BASE + "principal";
+    public static final String INTEGRATION_MESOS_ROLE =
+        INTEGRATION_MESOS_BASE + "role";
+    public static final String INTEGRATION_MESOS_SECRET =
+        INTEGRATION_MESOS_BASE + "secret";
+    public static final String INTEGRATION_MESOS_USER =
+        INTEGRATION_MESOS_BASE + "mesos.user";
     public static final String INTEGRATION_WORKER_RESOURCE_CPU =
         "alluxio.integration.worker.resource.cpu";
     public static final String INTEGRATION_WORKER_RESOURCE_MEM =
         "alluxio.integration.worker.resource.mem";
     public static final String INTEGRATION_YARN_WORKERS_PER_HOST_MAX =
         "alluxio.integration.yarn.workers.per.host.max";
+
     public static final String KEY_VALUE_ENABLED = "alluxio.keyvalue.enabled";
     public static final String KEY_VALUE_PARTITION_SIZE_BYTES_MAX =
         "alluxio.keyvalue.partition.size.bytes.max";
